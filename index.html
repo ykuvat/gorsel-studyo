@@ -333,16 +333,16 @@
         </div>
         <div class="field">
           <label class="field-label">Başlık</label>
-          <textarea id="title" rows="2" maxlength="120" placeholder="Örn: ATSO Spor Oyunları Kura Çekimi"></textarea>
+          <textarea id="title" rows="2" placeholder="Örn: ATSO Spor Oyunları Kura Çekimi"></textarea>
         </div>
         <div class="field">
           <label class="field-label">Metin</label>
-          <textarea id="body" rows="5" maxlength="420" placeholder="Duyurunun uzun açıklama metni buraya yazılabilir..."></textarea>
+          <textarea id="body" rows="6" placeholder="Duyurunun uzun açıklama metni buraya yazılabilir..."></textarea>
           <div class="hint">Vurgulamak için <code>*kelime*</code> yazın. Madde listesi için her satırın başına <code>- </code> koyun.</div>
         </div>
         <div class="field">
           <label class="field-label">Alt Başlık / Tarih</label>
-          <input type="text" id="subtitle" maxlength="80" placeholder="Örn: 15 Eylül 2026 · Saat 14:00" value="">
+          <input type="text" id="subtitle" placeholder="Örn: 15 Eylül 2026 · Saat 14:00" value="">
         </div>
         </div>
       </div>
@@ -368,6 +368,23 @@
             <div class="toggle-row" style="margin-bottom:0;">
               <span>Başlık üstte, metin altta</span>
               <label class="switch"><input type="checkbox" id="splitPos"><span class="slider-toggle"></span></label>
+            </div>
+          </div>
+          <div class="range-row">
+            <div class="range-label"><span>Başlık boyutu</span><span id="titleScaleLabel">100%</span></div>
+            <input type="range" id="titleScale" min="50" max="170" value="100">
+          </div>
+          <div class="range-row">
+            <div class="range-label"><span>Metin boyutu</span><span id="bodyScaleLabel">100%</span></div>
+            <input type="range" id="bodyScale" min="50" max="170" value="100">
+          </div>
+          <div class="field">
+            <label class="field-label">Metin Hizalama</label>
+            <div class="segmented" id="bodyAlignSeg">
+              <button type="button" data-align="center" class="active">Orta</button>
+              <button type="button" data-align="left">Sol</button>
+              <button type="button" data-align="right">Sağ</button>
+              <button type="button" data-align="justify">İki yana</button>
             </div>
           </div>
           <div class="field">
@@ -825,7 +842,12 @@
   }
 
   // draws one wrapped line of rich words, centered or left-aligned, switching font/color per word for highlights
-  function drawWordLine(ctx, words, x, y, align, fontNormal, fontHl, colorNormal, colorHl){
+  // align: "center" | "left" | "right" | "justify"
+  // x: center hizada merkez, left/justify'de sol kenar, right'ta sağ kenar
+  // opts.width  : justify için satırın doldurması gereken genişlik
+  // opts.noJustify : paragrafın son satırı (iki yana yaslanmaz)
+  function drawWordLine(ctx, words, x, y, align, fontNormal, fontHl, colorNormal, colorHl, opts){
+    opts = opts || {};
     ctx.font = fontNormal;
     const spaceW = ctx.measureText(" ").width;
     let total = 0;
@@ -833,13 +855,27 @@
       ctx.font = word.hl ? fontHl : fontNormal;
       total += ctx.measureText(word.w).width + (i>0 ? spaceW : 0);
     });
-    let cx = align==="center" ? x - total/2 : x;
+
+    let gap = spaceW;
+    let cx;
+    if(align === "justify" && opts.width && words.length > 1 && !opts.noJustify){
+      const extra = opts.width - total;
+      if(extra > 0) gap = spaceW + extra/(words.length-1);
+      cx = x;
+    } else if(align === "center"){
+      cx = x - total/2;
+    } else if(align === "right"){
+      cx = x - total;
+    } else {
+      cx = x; // left ve justify'nin son satırı
+    }
+
     ctx.textAlign = "left";
-    words.forEach((word,i)=>{
+    words.forEach((word)=>{
       ctx.font = word.hl ? fontHl : fontNormal;
       ctx.fillStyle = word.hl ? colorHl : colorNormal;
       ctx.fillText(word.w, cx, y);
-      cx += ctx.measureText(word.w).width + spaceW;
+      cx += ctx.measureText(word.w).width + gap;
     });
   }
 
@@ -854,13 +890,13 @@
         const hadDash = /^\s*-\s+/.test(l);
         const stripped = l.replace(/^\s*-\s+/, "");
         const wrapped = wrapWords(ctx, richToWords(stripped), maxWidth-indentWidth);
-        wrapped.forEach((ln,idx)=>{ outLines.push({words:ln, bulletStart: idx===0 && hadDash}); });
+        wrapped.forEach((ln,idx)=>{ outLines.push({words:ln, bulletStart: idx===0 && hadDash, lastOfPara: idx===wrapped.length-1}); });
       });
     } else {
       rawLines.forEach(l=>{
         if(!l.trim()) return;
         const wrapped = wrapWords(ctx, richToWords(l), maxWidth);
-        wrapped.forEach(ln=>outLines.push({words:ln, bulletStart:false}));
+        wrapped.forEach((ln,idx)=>outLines.push({words:ln, bulletStart:false, lastOfPara: idx===wrapped.length-1}));
       });
     }
     return {isList, lines: outLines};
@@ -1052,6 +1088,9 @@
     textColor:"#FFFFFF",
     accentColor:"#D4A62A",
     showCategory:true,
+    titleScale:1,
+    bodyScale:1,
+    bodyAlign:"center",
     titleBg:true,
     bodyBg:true,
     panelJoined:true,
@@ -1283,30 +1322,41 @@
 
     ctx.textAlign="center"; ctx.textBaseline="alphabetic";
 
-    // title — shrinks to fit, supports *vurgu*
-    let titleSize = w*0.066;
+    // kullanıcı boyut çarpanları (Görünüm > Başlık/Metin boyutu)
+    const tScale = st.titleScale || 1;
+    const bScale = st.bodyScale || 1;
+    const bodyTextRaw = (st.body||"").trim();
+    const titleTextRaw = (st.title||"").trim();
+
+    // alanı verimli paylaştır: sadece biri doluysa o daha çok yer alsın
+    const titleShare = bodyTextRaw ? 0.34 : 0.62;
+    const bodyShare  = titleTextRaw ? 0.56 : 0.80;
+
+    // title — sığana kadar küçülür, *vurgu* destekler
+    let titleSize = w*0.070*tScale;
+    const titleMin = w*0.020*tScale;
     let titleWordLines = [];
-    for(; titleSize > w*0.028; titleSize -= w*0.0025){
+    for(; titleSize > titleMin; titleSize -= w*0.0018){
       ctx.font = F(800, titleSize);
       titleWordLines = wrapWords(ctx, richToWords(st.title||""), maxTextWidth);
-      if(titleWordLines.length * titleSize*1.16 < zoneH*0.32) break;
+      if(titleWordLines.length * titleSize*1.16 < zoneH*titleShare) break;
     }
     const titleLineH = titleSize*1.16;
 
-    // body / "Metin" — supports longer multi-line text, *vurgu* highlight and "- " bullet lists
-    let bodySize = w*0.028;
+    // body / "Metin" — uzun metin, *vurgu* ve "- " madde listesi destekler
+    let bodySize = w*0.030*bScale;
+    const bodyMin = w*0.0105*bScale;
     const bodyIndent = w*0.032;
     let bodyLayout = {isList:false, lines:[]};
-    const bodyTextRaw = (st.body||"").trim();
     if(bodyTextRaw){
-      for(; bodySize > w*0.015; bodySize -= w*0.0012){
+      for(; bodySize > bodyMin; bodySize -= w*0.0008){
         ctx.font = F(400, bodySize);
-        bodyLayout = layoutBodyText(ctx, bodyTextRaw, maxTextWidth*0.94, bodyIndent);
-        if(bodyLayout.lines.length * bodySize*1.5 < zoneH*0.46) break;
+        bodyLayout = layoutBodyText(ctx, bodyTextRaw, maxTextWidth*0.96, bodyIndent);
+        if(bodyLayout.lines.length * bodySize*1.42 < zoneH*bodyShare) break;
       }
     }
     const bodyLines = bodyLayout.lines;
-    const bodyLineH = bodySize*1.5;
+    const bodyLineH = bodySize*1.42;
 
     // subtitle / date
     const subSize = titleSize*0.36;
@@ -1405,6 +1455,9 @@
       const bodyFontHl = F(700, bodySize);
       const listLeftX = panelX + blockPad*0.7;
       const listTextX = listLeftX + bodyIndent;
+      const bAlign = st.bodyAlign || "center";
+      const textLeftX = centerX - maxTextWidth*0.96/2;
+      const textRightX = centerX + maxTextWidth*0.96/2;
       bodyLines.forEach(line=>{
         if(bodyLayout.isList){
           if(line.bulletStart){
@@ -1412,9 +1465,17 @@
             ctx.textAlign="left"; ctx.textBaseline="alphabetic";
             ctx.fillText("•", listLeftX, ty);
           }
-          drawWordLine(ctx, line.words, listTextX, ty, "left", bodyFontNormal, bodyFontHl, st.textColor, st.accentColor);
+          // madde listesi her zaman sola dayalı; iki yana yaslama seçiliyse satırlar doldurulur
+          drawWordLine(ctx, line.words, listTextX, ty, bAlign==="justify"?"justify":"left",
+            bodyFontNormal, bodyFontHl, st.textColor, st.accentColor,
+            {width: textRightX - listTextX, noJustify: line.lastOfPara});
         } else {
-          drawWordLine(ctx, line.words, centerX, ty, "center", bodyFontNormal, bodyFontHl, st.textColor, st.accentColor);
+          let ax = centerX;
+          if(bAlign === "left" || bAlign === "justify") ax = textLeftX;
+          else if(bAlign === "right") ax = textRightX;
+          drawWordLine(ctx, line.words, ax, ty, bAlign,
+            bodyFontNormal, bodyFontHl, st.textColor, st.accentColor,
+            {width: maxTextWidth*0.96, noJustify: line.lastOfPara});
         }
         ty += bodyLineH;
       });
@@ -1983,6 +2044,12 @@ Canlı, etkileyici, yüksek kaliteli, temaya uygun dolu bir kompozisyon olsun �
     document.querySelectorAll('#personFields .segmented button[data-placement]').forEach(b=>{
       b.classList.toggle("active", b.dataset.placement === state.personNamePlacement);
     });
+    const ts=document.getElementById("titleScale"), bs=document.getElementById("bodyScale");
+    if(ts){ ts.value=Math.round((state.titleScale||1)*100); document.getElementById("titleScaleLabel").textContent=ts.value+"%"; }
+    if(bs){ bs.value=Math.round((state.bodyScale||1)*100); document.getElementById("bodyScaleLabel").textContent=bs.value+"%"; }
+    document.querySelectorAll('#bodyAlignSeg button[data-align]').forEach(b=>{
+      b.classList.toggle("active", b.dataset.align === (state.bodyAlign||"center"));
+    });
     chk("showCategory", state.showCategory !== false);
     chk("titleBg", state.titleBg !== false);
     chk("bodyBg", state.bodyBg !== false);
@@ -2024,6 +2091,26 @@ Canlı, etkileyici, yüksek kaliteli, temaya uygun dolu bir kompozisyon olsun �
       ]).then(()=>{ renderMain(); buildGallery(); }).catch(()=>{});
     }
     renderMain(); buildGallery();
+  });
+
+  // boyut kaydırıcıları
+  [["titleScale","titleScale","titleScaleLabel"],["bodyScale","bodyScale","bodyScaleLabel"]].forEach(([id,key,lbl])=>{
+    const el=document.getElementById(id); if(!el) return;
+    el.addEventListener("input", e=>{
+      state[key] = (+e.target.value)/100;
+      document.getElementById(lbl).textContent = e.target.value+"%";
+      renderMain();
+    });
+  });
+
+  // metin hizalama
+  document.querySelectorAll('#bodyAlignSeg button[data-align]').forEach(btn=>{
+    btn.addEventListener("click", ()=>{
+      document.querySelectorAll('#bodyAlignSeg button[data-align]').forEach(b=>b.classList.remove("active"));
+      btn.classList.add("active");
+      state.bodyAlign = btn.dataset.align;
+      renderMain(); buildGallery();
+    });
   });
 
   // kompozisyon anahtarları

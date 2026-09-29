@@ -3,7 +3,7 @@
    Yeni sürüm yayınladığında aşağıdaki CACHE_VERSION'ı artır (v2, v3 ...) ki
    kullanıcıların tarayıcısı eski sürümde takılı kalmasın. */
 
-const CACHE_VERSION = "kuvat-gorsel-v3";
+const CACHE_VERSION = "kuvat-gorsel-v4";
 const APP_SHELL = [
   "./",
   "./index.html",
